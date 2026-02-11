@@ -92,20 +92,28 @@ jobs:
 
       - name: Sync Images
         run: |
+          # 引用 Job 1 传递的变量，注意语法：needs.<job_id>.outputs.<var>
           REMOTE_IMG=${{ env.REGISTRY_REMOTE }}/${{ needs.build-in-cloud.outputs.image_name_lower }}:latest
           LOCAL_IMG=${{ env.REGISTRY_LOCAL }}/${{ env.LOCAL_TAG }}:latest
           
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ${{ env.REGISTRY_REMOTE }} -u ${{ github.actor }} --password-stdin
           echo "${{ secrets.PWD_CRHZ }}" | docker login ${{ env.REGISTRY_LOCAL }} -u ${{ secrets.USERNAME_CRHZ }} --password-stdin
 
+          echo "正在从 GHCR 拉取..."
           docker pull $REMOTE_IMG
+          
+          echo "正在重新打标并推送..."
           docker tag $REMOTE_IMG $LOCAL_IMG
           docker push $LOCAL_IMG
+          
+          echo "清理临时镜像..."
           docker rmi $REMOTE_IMG
 
       - name: Update Release Text
         if: always()
         uses: softprops/action-gh-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: latest
           body: |
@@ -114,5 +122,3 @@ jobs:
             - **云端构建时间:** ${{ needs.build-in-cloud.outputs.build_time }}
             - **本地镜像地址:** ${{ env.REGISTRY_LOCAL }}/${{ env.LOCAL_TAG }}:latest
             - **本地加速通道:** ${{ env.CURRENT_PROXY }}
-          env:
-            GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
