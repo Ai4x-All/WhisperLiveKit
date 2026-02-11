@@ -1,8 +1,8 @@
-name: Cloud Build and Sync
+name: Cloud Build and Dynamic Proxy Sync
 
 on:
-  #push:
-  #  branches: [ main ]
+  push:
+    branches: [ main ]
   workflow_dispatch:
     inputs:
       proxy_url:
@@ -25,6 +25,7 @@ jobs:
     outputs:
       image_name_lower: ${{ steps.vars.outputs.image_name_lower }}
       short_sha: ${{ steps.vars.outputs.short_sha }}
+      build_time: ${{ steps.vars.outputs.build_time }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -35,6 +36,7 @@ jobs:
           RAW_REPO="${{ github.repository }}"
           echo "image_name_lower=${RAW_REPO,,}" >> $GITHUB_OUTPUT
           echo "short_sha=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+          echo "build_time=$(date '+%Y-%m-%d %H:%M:%S')" >> $GITHUB_OUTPUT
 
       - name: Log in to GHCR
         uses: docker/login-action@v2
@@ -64,23 +66,19 @@ jobs:
           PROXY_URL="${{ github.event.inputs.proxy_url }}"
           
           if [ -n "$PROXY_URL" ]; then
-            echo "✓ 使用用户输入的代理: $PROXY_URL"
             FINAL_HTTP_PROXY="$PROXY_URL"
-            FINAL_HTTPS_PROXY="$PROXY_URL"
           else
-            echo "未提供手动代理，尝试从本地 git config 读取..."
             G_HTTP=$(git config --global http.proxy || echo "")
             G_HTTPS=$(git config --global https.proxy || echo "")
             FINAL_HTTP_PROXY="${G_HTTP:-$G_HTTPS}"
-            FINAL_HTTPS_PROXY="${G_HTTPS:-$G_HTTP}"
           fi
 
           if [ -n "$FINAL_HTTP_PROXY" ]; then
             echo "HTTP_PROXY=$FINAL_HTTP_PROXY" >> $GITHUB_ENV
-            echo "HTTPS_PROXY=$FINAL_HTTPS_PROXY" >> $GITHUB_ENV
-            echo "✓ 本地同步将使用代理: $FINAL_HTTP_PROXY"
+            echo "HTTPS_PROXY=$FINAL_HTTP_PROXY" >> $GITHUB_ENV
+            echo "CURRENT_PROXY=$FINAL_HTTP_PROXY" >> $GITHUB_ENV
           else
-            echo "⚠ 未发现可用代理，将尝试直连拉取"
+            echo "CURRENT_PROXY=Direct Connect" >> $GITHUB_ENV
           fi
 
           DEFAULT_NO_PROXY="localhost,127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,${{ env.REGISTRY_LOCAL }}"
@@ -90,9 +88,7 @@ jobs:
           if [[ "$FINAL_NO_PROXY" != *"${{ env.REGISTRY_LOCAL }}"* ]]; then
             FINAL_NO_PROXY="$FINAL_NO_PROXY,${{ env.REGISTRY_LOCAL }}"
           fi
-          
           echo "NO_PROXY=$FINAL_NO_PROXY" >> $GITHUB_ENV
-          echo "✓ NO_PROXY 已设置: $FINAL_NO_PROXY"
 
       - name: Sync Images
         run: |
@@ -102,14 +98,9 @@ jobs:
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ${{ env.REGISTRY_REMOTE }} -u ${{ github.actor }} --password-stdin
           echo "${{ secrets.PWD_CRHZ }}" | docker login ${{ env.REGISTRY_LOCAL }} -u ${{ secrets.USERNAME_CRHZ }} --password-stdin
 
-          echo "正在从 GHCR 拉取..."
           docker pull $REMOTE_IMG
-          
-          echo "正在打标并推送..."
           docker tag $REMOTE_IMG $LOCAL_IMG
           docker push $LOCAL_IMG
-          
-          echo "清理临时镜像..."
           docker rmi $REMOTE_IMG
 
       - name: Update Release Text
@@ -120,8 +111,8 @@ jobs:
           body: |
             ## 自动同步报告
             - **构建版本:** ${{ needs.build-in-cloud.outputs.short_sha }}
-            - **同步时间:** ${{ github.event.head_commit.timestamp || 'N/A' }}
-            - **本地镜像:** ${{ env.REGISTRY_LOCAL }}/${{ env.LOCAL_TAG }}:latest
-            - **加速状态:** 已完成
+            - **云端构建时间:** ${{ needs.build-in-cloud.outputs.build_time }}
+            - **本地镜像地址:** ${{ env.REGISTRY_LOCAL }}/${{ env.LOCAL_TAG }}:latest
+            - **本地加速通道:** ${{ env.CURRENT_PROXY }}
           env:
             GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
