@@ -16,7 +16,7 @@ env:
   LOCAL_TAG: whisper-live-kit
 
 jobs:
-  # 阶段一：GitHub 云端构建
+  # 阶段一：GitHub 云端构建 (利用 GitHub 托管服务器)
   build-in-cloud:
     runs-on: ubuntu-latest
     permissions:
@@ -54,10 +54,11 @@ jobs:
             ${{ env.REGISTRY_REMOTE }}/${{ steps.vars.outputs.image_name_lower }}:latest
             ${{ env.REGISTRY_REMOTE }}/${{ steps.vars.outputs.image_name_lower }}:${{ steps.vars.outputs.short_sha }}
 
-  # 阶段二：本地服务器同步
+  # 阶段二：本地服务器同步 (匹配你的成功案例配置)
   sync-to-local:
     needs: build-in-cloud
     runs-on: [self-hosted, hangzhou, dev]
+    environment: dev  # 关键修复：匹配你成功案例中的环境配置
     steps:
       - name: Check Proxy Configuration
         id: proxy_check
@@ -92,10 +93,11 @@ jobs:
 
       - name: Sync Images
         run: |
-          # 引用 Job 1 传递的变量，注意语法：needs.<job_id>.outputs.<var>
+          # 引用 Job 1 传递的输出变量
           REMOTE_IMG=${{ env.REGISTRY_REMOTE }}/${{ needs.build-in-cloud.outputs.image_name_lower }}:latest
           LOCAL_IMG=${{ env.REGISTRY_LOCAL }}/${{ env.LOCAL_TAG }}:latest
           
+          echo "登录远程与本地 Registry..."
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ${{ env.REGISTRY_REMOTE }} -u ${{ github.actor }} --password-stdin
           echo "${{ secrets.PWD_CRHZ }}" | docker login ${{ env.REGISTRY_LOCAL }} -u ${{ secrets.USERNAME_CRHZ }} --password-stdin
 
