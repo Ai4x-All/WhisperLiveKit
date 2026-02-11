@@ -13,11 +13,10 @@ on:
 env:
   REGISTRY_REMOTE: ghcr.io
   REGISTRY_LOCAL: crhz.ai4x.com.cn
-  # 本地 Registry 中的目标镜像名，建议也保持全小写
   LOCAL_TAG: whisper-live-kit
 
 jobs:
-  # 阶段一：GitHub 云端构建 (利用 GitHub 算力)
+  # 阶段一：GitHub 云端构建
   build-in-cloud:
     runs-on: ubuntu-latest
     permissions:
@@ -33,7 +32,6 @@ jobs:
       - name: Set Variables
         id: vars
         run: |
-          # 核心修复：将 GitHub 仓库名转换为全小写以符合 Docker 规范
           RAW_REPO="${{ github.repository }}"
           echo "image_name_lower=${RAW_REPO,,}" >> $GITHUB_OUTPUT
           echo "short_sha=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
@@ -54,7 +52,7 @@ jobs:
             ${{ env.REGISTRY_REMOTE }}/${{ steps.vars.outputs.image_name_lower }}:latest
             ${{ env.REGISTRY_REMOTE }}/${{ steps.vars.outputs.image_name_lower }}:${{ steps.vars.outputs.short_sha }}
 
-  # 阶段二：本地服务器同步 (执行拉取、打标、推送)
+  # 阶段二：本地服务器同步
   sync-to-local:
     needs: build-in-cloud
     runs-on: [self-hosted, hangzhou, dev]
@@ -85,7 +83,6 @@ jobs:
             echo "⚠ 未发现可用代理，将尝试直连拉取"
           fi
 
-          # 自动配置 NO_PROXY，确保推送到局域网 Registry 时不走代理
           DEFAULT_NO_PROXY="localhost,127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,${{ env.REGISTRY_LOCAL }}"
           GIT_NO_PROXY=$(git config --global http.noProxy || echo "")
           FINAL_NO_PROXY="${GIT_NO_PROXY:-$DEFAULT_NO_PROXY}"
@@ -99,24 +96,21 @@ jobs:
 
       - name: Sync Images
         run: |
-          # 获取 Job 1 传递的小写镜像名
           REMOTE_IMG=${{ env.REGISTRY_REMOTE }}/${{ needs.build-in-cloud.outputs.image_name_lower }}:latest
           LOCAL_IMG=${{ env.REGISTRY_LOCAL }}/${{ env.LOCAL_TAG }}:latest
           
-          echo "登录远程与本地 Registry..."
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ${{ env.REGISTRY_REMOTE }} -u ${{ github.actor }} --password-stdin
           echo "${{ secrets.PWD_CRHZ }}" | docker login ${{ env.REGISTRY_LOCAL }} -u ${{ secrets.USERNAME_CRHZ }} --password-stdin
 
-          echo "正在从 GHCR 拉取 (自动识别 HTTP_PROXY)..."
+          echo "正在从 GHCR 拉取..."
           docker pull $REMOTE_IMG
           
-          echo "正在重新打标并推送至本地私有仓库..."
+          echo "正在打标并推送..."
           docker tag $REMOTE_IMG $LOCAL_IMG
           docker push $LOCAL_IMG
           
-          echo "清理本地临时镜像存根..."
+          echo "清理临时镜像..."
           docker rmi $REMOTE_IMG
-          echo "=== 同步任务成功结束 ==="
 
       - name: Update Release Text
         if: always()
@@ -126,8 +120,8 @@ jobs:
           body: |
             ## 自动同步报告
             - **构建版本:** ${{ needs.build-in-cloud.outputs.short_sha }}
-            - **同步时间:** $(date '+%Y-%m-%d %H:%M:%S')
-            - **本地镜像:** `${{ env.REGISTRY_LOCAL }}/${{ env.LOCAL_TAG }}:latest`
-            - **加速方式:** ${{ env.HTTP_PROXY || '直连' }}
+            - **同步时间:** ${{ github.event.head_commit.timestamp || 'N/A' }}
+            - **本地镜像:** ${{ env.REGISTRY_LOCAL }}/${{ env.LOCAL_TAG }}:latest
+            - **加速状态:** 已完成
           env:
             GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
