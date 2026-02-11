@@ -1,107 +1,62 @@
-name: Cloud Build and Dynamic Proxy Sync
+name: Build and Push Docker Image
 
+# 触发条件：推送到 main 分支或手动触发
 on:
   #push:
-  #  branches: [ main ]
+  #  branches:
+  #    - main
   workflow_dispatch:
-    inputs:
-      proxy_url:
-        description: '手动指定代理地址 (可选)'
-        required: false
-        default: ''
 
 env:
-  REGISTRY_REMOTE: ghcr.io
-  REGISTRY_LOCAL: crhz.ai4x.com.cn
+  REGISTRY: ghcr.io
+  # 这里定义原始名称（包含大写）
   IMAGE_NAME: ${{ github.repository }}
-  LOCAL_TAG: whisper-live-kit
 
 jobs:
-  # 阶段一：GitHub 云端构建 (利用 GitHub 算力)
-  build-in-cloud:
+  build:
     runs-on: ubuntu-latest
+    # 授予 GitHub Token 写入 Packages 的权限
     permissions:
-      contents: write
+      contents: read
       packages: write
+
     steps:
-      - name: Checkout
+      # 1. 拉取代码
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Log in to GHCR
-        uses: docker/login-action@v2
+      # 2. 核心步骤：强制转换镜像名称为全小写
+      # 使用 Bash 的参数扩展 ${VAR,,} 或 ${VAR@L} 转换大小写
+      - name: Prepare Image Name
+        id: prep
+        run: |
+          GH_REPO_LOWER="${GITHUB_REPOSITORY@L}"
+          echo "image_tag=${{ env.REGISTRY }}/${GH_REPO_LOWER}:latest" >> $GITHUB_OUTPUT
+          echo "image_sha_tag=${{ env.REGISTRY }}/${GH_REPO_LOWER}:${{ github.sha }}" >> $GITHUB_OUTPUT
+
+      # 3. 设置 Docker Buildx (支持多平台构建和缓存优化)
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # 4. 登录到 GitHub Container Registry
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3
         with:
-          registry: ${{ env.REGISTRY_REMOTE }}
+          registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and Push to GHCR
-        uses: docker/build-push-action@v4
+      # 5. 构建并推送镜像
+      - name: Build and push
+        uses: docker/build-push-action@v5
         with:
           context: .
+          file: ./Dockerfile
           push: true
-          tags: ${{ env.REGISTRY_REMOTE }}/${{ env.IMAGE_NAME }}:latest
-
-  # 阶段二：本地服务器同步 (执行拉取、打标、推送)
-  sync-to-local:
-    needs: build-in-cloud
-    runs-on: [self-hosted, hangzhou, dev]
-    steps:
-      - name: Check Proxy Configuration
-        id: proxy_check
-        run: |
-          echo "=== 检查代理配置 ==="
-          PROXY_URL="${{ github.event.inputs.proxy_url }}"
-          
-          if [ -n "$PROXY_URL" ]; then
-            echo "✓ 使用用户输入的代理: $PROXY_URL"
-            FINAL_HTTP_PROXY="$PROXY_URL"
-            FINAL_HTTPS_PROXY="$PROXY_URL"
-          else
-            echo "尝试从 git config 读取..."
-            G_HTTP=$(git config --global http.proxy || echo "")
-            G_HTTPS=$(git config --global https.proxy || echo "")
-            FINAL_HTTP_PROXY="${G_HTTP:-$G_HTTPS}"
-            FINAL_HTTPS_PROXY="${G_HTTPS:-$G_HTTP}"
-          fi
-
-          if [ -n "$FINAL_HTTP_PROXY" ]; then
-            echo "HTTP_PROXY=$FINAL_HTTP_PROXY" >> $GITHUB_ENV
-            echo "HTTPS_PROXY=$FINAL_HTTPS_PROXY" >> $GITHUB_ENV
-            echo "✓ 代理已锁定: $FINAL_HTTP_PROXY"
-          else
-            echo "⚠ 未发现可用代理，将尝试直连"
-          fi
-
-          # 处理 NO_PROXY，必须包含本地 Registry 地址
-          DEFAULT_NO_PROXY="localhost,127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,${{ env.REGISTRY_LOCAL }}"
-          GIT_NO_PROXY=$(git config --global http.noProxy || echo "")
-          FINAL_NO_PROXY="${GIT_NO_PROXY:-$DEFAULT_NO_PROXY}"
-          
-          # 如果 git 里的 noProxy 没包含本地 registry，手动补全
-          if [[ "$FINAL_NO_PROXY" != *"${{ env.REGISTRY_LOCAL }}"* ]]; then
-            FINAL_NO_PROXY="$FINAL_NO_PROXY,${{ env.REGISTRY_LOCAL }}"
-          fi
-          
-          echo "NO_PROXY=$FINAL_NO_PROXY" >> $GITHUB_ENV
-          echo "✓ NO_PROXY 已设置: $FINAL_NO_PROXY"
-
-      - name: Sync Images
-        run: |
-          REMOTE_IMG=${{ env.REGISTRY_REMOTE }}/${{ env.IMAGE_NAME }}:latest
-          LOCAL_IMG=${{ env.REGISTRY_LOCAL }}/${{ env.LOCAL_TAG }}:latest
-          
-          # 登录两个 Registry
-          # 注意：login 过程可能受代理影响，也可能不需要
-          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ${{ env.REGISTRY_REMOTE }} -u ${{ github.actor }} --password-stdin
-          echo "${{ secrets.PWD_CRHZ }}" | docker login ${{ env.REGISTRY_LOCAL }} -u ${{ secrets.USERNAME_CRHZ }} --password-stdin
-
-          echo "正在从 GHCR 拉取 (使用代理)..."
-          # Docker Pull 会自动读取环境变量中的 HTTP_PROXY
-          docker pull $REMOTE_IMG
-          
-          echo "正在打标并推送到本地仓库 (NO_PROXY 应生效)..."
-          docker tag $REMOTE_IMG $LOCAL_IMG
-          docker push $LOCAL_IMG
-          
-          echo "清理本地临时镜像..."
-          docker rmi $REMOTE_IMG
+          # 引用步骤 2 中生成的全小写标签
+          tags: |
+            ${{ steps.prep.outputs.image_tag }}
+            ${{ steps.prep.outputs.image_sha_tag }}
+          # 启用 GitHub Actions 缓存，显著提升二次构建速度
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
