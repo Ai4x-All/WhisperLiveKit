@@ -1,22 +1,15 @@
-name: Cloud Build and Dynamic Proxy Sync
+name: Cloud Build
 
 on:
-  push:
-    branches: [ main ]
+  #push:
+  #  branches: [ main ]
   workflow_dispatch:
-    inputs:
-      proxy_url:
-        description: '手动指定代理地址 (可选)'
-        required: false
-        default: ''
 
 env:
   REGISTRY_REMOTE: ghcr.io
-  REGISTRY_LOCAL: crhz.ai4x.com.cn
   LOCAL_TAG: whisper-live-kit
 
 jobs:
-  # 阶段一：GitHub 云端构建 (利用 GitHub 托管服务器)
   build-in-cloud:
     runs-on: ubuntu-latest
     permissions:
@@ -54,73 +47,37 @@ jobs:
             ${{ env.REGISTRY_REMOTE }}/${{ steps.vars.outputs.image_name_lower }}:latest
             ${{ env.REGISTRY_REMOTE }}/${{ steps.vars.outputs.image_name_lower }}:${{ steps.vars.outputs.short_sha }}
 
-  # 阶段二：本地服务器同步 (匹配你的成功案例配置)
-  sync-to-local:
-    needs: build-in-cloud
-    runs-on: [self-hosted, hangzhou, dev]
-    environment: dev  # 关键修复：匹配你成功案例中的环境配置
-    steps:
-      - name: Check Proxy Configuration
-        id: proxy_check
-        run: |
-          echo "=== 检查代理配置 ==="
-          PROXY_URL="${{ github.event.inputs.proxy_url }}"
-          
-          if [ -n "$PROXY_URL" ]; then
-            FINAL_HTTP_PROXY="$PROXY_URL"
-          else
-            G_HTTP=$(git config --global http.proxy || echo "")
-            G_HTTPS=$(git config --global https.proxy || echo "")
-            FINAL_HTTP_PROXY="${G_HTTP:-$G_HTTPS}"
-          fi
-
-          if [ -n "$FINAL_HTTP_PROXY" ]; then
-            echo "HTTP_PROXY=$FINAL_HTTP_PROXY" >> $GITHUB_ENV
-            echo "HTTPS_PROXY=$FINAL_HTTP_PROXY" >> $GITHUB_ENV
-            echo "CURRENT_PROXY=$FINAL_HTTP_PROXY" >> $GITHUB_ENV
-          else
-            echo "CURRENT_PROXY=Direct Connect" >> $GITHUB_ENV
-          fi
-
-          DEFAULT_NO_PROXY="localhost,127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,${{ env.REGISTRY_LOCAL }}"
-          GIT_NO_PROXY=$(git config --global http.noProxy || echo "")
-          FINAL_NO_PROXY="${GIT_NO_PROXY:-$DEFAULT_NO_PROXY}"
-          
-          if [[ "$FINAL_NO_PROXY" != *"${{ env.REGISTRY_LOCAL }}"* ]]; then
-            FINAL_NO_PROXY="$FINAL_NO_PROXY,${{ env.REGISTRY_LOCAL }}"
-          fi
-          echo "NO_PROXY=$FINAL_NO_PROXY" >> $GITHUB_ENV
-
-      - name: Sync Images
-        run: |
-          # 引用 Job 1 传递的输出变量
-          REMOTE_IMG=${{ env.REGISTRY_REMOTE }}/${{ needs.build-in-cloud.outputs.image_name_lower }}:latest
-          LOCAL_IMG=${{ env.REGISTRY_LOCAL }}/${{ env.LOCAL_TAG }}:latest
-          
-          echo "登录远程与本地 Registry..."
-          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ${{ env.REGISTRY_REMOTE }} -u ${{ github.actor }} --password-stdin
-          echo "${{ secrets.PWD_CRHZ }}" | docker login ${{ env.REGISTRY_LOCAL }} -u ${{ secrets.USERNAME_CRHZ }} --password-stdin
-
-          echo "正在从 GHCR 拉取..."
-          docker pull $REMOTE_IMG
-          
-          echo "正在重新打标并推送..."
-          docker tag $REMOTE_IMG $LOCAL_IMG
-          docker push $LOCAL_IMG
-          
-          echo "清理临时镜像..."
-          docker rmi $REMOTE_IMG
-
-      - name: Update Release Text
-        if: always()
+      - name: Create Release with Manual Pull Instructions
         uses: softprops/action-gh-release@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: latest
+          name: "WLK ASR 镜像构建成功 - ${{ steps.vars.outputs.short_sha }}"
           body: |
-            ## 自动同步报告
-            - **构建版本:** ${{ needs.build-in-cloud.outputs.short_sha }}
-            - **云端构建时间:** ${{ needs.build-in-cloud.outputs.build_time }}
-            - **本地镜像地址:** ${{ env.REGISTRY_LOCAL }}/${{ env.LOCAL_TAG }}:latest
-            - **本地加速通道:** ${{ env.CURRENT_PROXY }}
+            ## 🚀 云端构建已完成
+            镜像已成功推送到 GitHub Container Registry。
+            
+            - **镜像地址:** `ghcr.io/${{ steps.vars.outputs.image_name_lower }}:latest`
+            - **构建时间:** ${{ steps.vars.outputs.build_time }}
+            
+            ---
+            ## 🛠 手动同步到局域网
+            请在本地服务器上执行以下命令，将镜像同步到私有仓库：
+            
+            ```bash
+            # 1. 设置代理 (如果需要)
+            export http_proxy=http://...
+            export https_proxy=http://...
+            
+            # 2. 从 GitHub 拉取
+            docker pull ghcr.io/${{ steps.vars.outputs.image_name_lower }}:latest
+            
+            # 3. 取消代理并打标推送至本地仓库
+            unset http_proxy https_proxy
+            docker tag ghcr.io/${{ steps.vars.outputs.image_name_lower }}:latest {registry_host}/${{ env.LOCAL_TAG }}:latest
+            docker push {registry_host}/${{ env.LOCAL_TAG }}:latest
+            
+            # 4. 清理残留
+            docker rmi ghcr.io/${{ steps.vars.outputs.image_name_lower }}:latest
+            ```
