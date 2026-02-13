@@ -4,6 +4,11 @@ on:
   #push:
   #  branches: [ main ]
   workflow_dispatch:
+    inputs:
+      branch:
+        description: "构建分支"
+        required: false
+        default: "ai4x"
 
 env:
   REGISTRY_REMOTE: ghcr.io
@@ -22,6 +27,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.branch || 'ai4x' }}
 
       - name: Set Variables
         id: vars
@@ -29,6 +36,7 @@ jobs:
           RAW_REPO="${{ github.repository }}"
           echo "image_name_lower=${RAW_REPO,,}" >> $GITHUB_OUTPUT
           echo "short_sha=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+          echo "build_date=$(date '+%Y%m%d')" >> $GITHUB_OUTPUT
           echo "build_time=$(date '+%Y-%m-%d %H:%M:%S')" >> $GITHUB_OUTPUT
 
       - name: Log in to GHCR
@@ -52,7 +60,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: latest
+          tag_name: ${{ steps.vars.outputs.build_date }}-${{ steps.vars.outputs.short_sha }}
           name: "WLK ASR 镜像构建成功 - ${{ steps.vars.outputs.short_sha }}"
           body: |
             ## 🚀 云端构建已完成
