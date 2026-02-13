@@ -2,7 +2,7 @@
 # 完全离线启动 WhisperLiveKit：挂载 CTranslate2 模型 + PyTorch decoder 目录，禁用 warmup 下载。
 # 用法: ./run_wlk.sh [medium|large-v3|small|base] [-f|--foreground]
 # 默认 medium、后台(-d)。加 -f 或 --foreground 前台运行便于调试。
-# 需提前准备: faster-whisper-<名> 与 pytorch-whisper-<名>；补丁目录含 parse_args.py、core.py、backend.py（见 docs/offline-run.md）
+# 需提前准备: faster-whisper-<名> 与 pytorch-whisper-<名>（见 docs/offline-run.md）
 
 set -e
 FOREGROUND=""
@@ -13,9 +13,7 @@ DETACH="-d"
 [[ -n "$FOREGROUND" ]] && DETACH=""
 
 MODELS_DIR="/data/whisper_models"
-PATCH_DIR="${PATCH_DIR:-/etc/apps/whisperlivekit}"
 IMAGE="crhz.ai4x.com.cn/whisperlivekit:latest"
-PKG="/opt/venv/lib/python3.12/site-packages/whisperlivekit"
 PORT=7100
 
 MODEL_DIR="$MODELS_DIR/faster-whisper-$MODEL"
@@ -32,25 +30,12 @@ if [[ ! -d "$DECODER_DIR" ]]; then
   echo "可选: base, small, medium, large-v3  需同时具备 faster-whisper-<名> 与 pytorch-whisper-<名>"
   exit 1
 fi
-# 离线需挂载三处补丁（支持 --decoder-dir），缺一不可
-PARSE_ARGS="$PATCH_DIR/parse_args.py"
-CORE_PY="$PATCH_DIR/core.py"
-BACKEND_PY="$PATCH_DIR/backend.py"
-for f in "$PARSE_ARGS" "$CORE_PY" "$BACKEND_PY"; do
-  if [[ ! -f "$f" ]]; then
-    echo "未找到补丁: $f（需将 parse_args.py、core.py、backend.py 放到 $PATCH_DIR）"
-    exit 1
-  fi
-done
 
 docker run $DETACH --rm \
   --gpus '"device=2"' \
   -p "$PORT:8000" \
   -v "$MODEL_DIR:$CONTAINER_MODEL_PATH:ro" \
   -v "$DECODER_DIR:$CONTAINER_DECODER_PATH:ro" \
-  -v "$PARSE_ARGS:$PKG/parse_args.py:ro" \
-  -v "$CORE_PY:$PKG/core.py:ro" \
-  -v "$BACKEND_PY:$PKG/simul_whisper/backend.py:ro" \
   --name "wlk-$MODEL" \
   "$IMAGE" \
   --model-path "$CONTAINER_MODEL_PATH" --decoder-dir "$CONTAINER_DECODER_PATH" --warmup-file "" --lan auto
