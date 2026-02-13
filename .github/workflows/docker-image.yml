@@ -47,6 +47,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and Push to GHCR
+        id: build
         uses: docker/build-push-action@v4
         with:
           context: .
@@ -67,6 +68,7 @@ jobs:
             镜像已成功推送到 GitHub Container Registry。
             
             - **镜像地址:** `ghcr.io/${{ steps.vars.outputs.image_name_lower }}:latest`
+            - **Digest:** `${{ steps.build.outputs.digest }}`
             - **构建时间:** ${{ steps.vars.outputs.build_time }}
             
             ---
@@ -80,7 +82,9 @@ jobs:
             
             # 2. 从 GitHub 拉取
             docker pull ghcr.io/${{ steps.vars.outputs.image_name_lower }}:latest
-            
+            # 或
+            crane cp ghcr.io/ai4x-all/whisperlivekit:latest crhz.ai4x.com.cn/whisperlivekit:latest -v
+
             # 3. 取消代理并打标推送至本地仓库
             unset http_proxy https_proxy
             docker tag ghcr.io/${{ steps.vars.outputs.image_name_lower }}:latest {registry_host}/${{ env.LOCAL_TAG }}:latest

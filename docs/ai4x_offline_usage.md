@@ -18,16 +18,50 @@ sudo mv crane /usr/local/bin/
 ```
 
 ```bash
-# 先配置http_proxy或all_proxy环境变量
-crane pull ghcr.io/ai4x-all/whisperlivekit:latest whisper_image.tar -v
-# 推到本地registry
-docker push whisperlivekit/whisperlivekit:latest
+crane auth login ghcr.io -u ai4x-all -p <你的PAT>
 ```
 
-或一步完成
+之后在同一环境再执行下面的 pull/cp 即可；代理环境下记得先设好 `ALL_PROXY` 或 `http_proxy`。
+
+目标地址必须是**内网 registry 全路径**（如 `crhz.ai4x.com.cn/whisperlivekit:latest`）。不要写成 `whisperlivekit/whisperlivekit:latest`，否则会被当成 Docker Hub，出现 401。
+
 ```bash
-ALL_PROXY=socks5://10.... crane cp ghcr.io/ai4x-all/whisperlivekit:latest whisperlivekit/whisperlivekit:latest -v
+# 先配置http_proxy或all_proxy环境变量
+crane pull ghcr.io/ai4x-all/whisperlivekit:latest whisper_image.tar -v
+# 导入并推到内网 registry（请把下面换成你的 registry 地址）
+docker load -i whisper_image.tar
+docker tag ghcr.io/ai4x-all/whisperlivekit:latest crhz.ai4x.com.cn/whisperlivekit:latest
+docker push crhz.ai4x.com.cn/whisperlivekit:latest
 ```
+
+或一步完成（目标写内网 registry 全路径）：
+```bash
+ALL_PROXY=socks5://10.10.10.18:7891 crane cp ghcr.io/ai4x-all/whisperlivekit:latest crhz.ai4x.com.cn/whisperlivekit:latest -v
+```
+
+在拉取新版到 registry 后，跑容器的机器如需用最新版，需再 pull 一次：
+```bash
+docker pull crhz.ai4x.com.cn/whisperlivekit:latest
+```
+
+**若感觉 latest 没更新**：先确认来源和本地缓存。
+1. **确认 ghcr.io 已是新构建**：在能访问外网的环境执行（代理按需加 `ALL_PROXY=...`）：
+   ```bash
+   crane digest ghcr.io/ai4x-all/whisperlivekit:latest
+   ```
+   记下输出的 digest（如 `sha256:abc123...`）。
+2. **确认内网 registry 已更新**：在内网能访问 registry 的机器上执行：
+   ```bash
+   crane digest crhz.ai4x.com.cn/whisperlivekit:latest
+   ```
+   若与第 1 步输出**完全一致**，说明 cp 过去的就是当前最新；不一致则需重新执行一次 crane cp。
+3. **跑容器的机器强制用新镜像**：本地已有同 tag 时，Docker 可能沿用旧镜像。先删本地再拉，或运行时强制拉取：
+   ```bash
+   docker rmi crhz.ai4x.com.cn/whisperlivekit:latest
+   docker pull crhz.ai4x.com.cn/whisperlivekit:latest
+   ```
+   或启动时用：`docker run --pull always ...`（需 run_wlk.sh 支持或手动加参数）。
+
 
 ### 准备模型
 

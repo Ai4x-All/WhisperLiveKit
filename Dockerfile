@@ -36,14 +36,14 @@ RUN pip3 install --upgrade pip setuptools wheel && \
 
 COPY . .
 
-# Install WhisperLiveKit directly, allowing for optional dependencies
+# Install WhisperLiveKit from the copied repo (not PyPI), so image uses this branch's code (e.g. --decoder-dir).
 # Example: --build-arg EXTRAS="translation"
 RUN if [ -n "$EXTRAS" ]; then \
       echo "Installing with extras: [$EXTRAS]"; \
-      pip install --no-cache-dir "whisperlivekit[$EXTRAS]"; \
+      pip install --no-cache-dir ".[$EXTRAS]"; \
     else \
-      echo "Installing base package only"; \
-      pip install --no-cache-dir whisperlivekit; \
+      echo "Installing base package from repo"; \
+      pip install --no-cache-dir .; \
     fi
 
 # In-container caching for Hugging Face models by: 
