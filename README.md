@@ -1,6 +1,7 @@
 <h1 align="center">WLK</h1>
 <p align="center"><b>WhisperLiveKit: Ultra-low-latency, self-hosted speech-to-text with speaker identification</b></p>
 
+[AI4X公司环境使用说明](docs/ai4x_offline_usage.md)
 
 <p align="center">
 <img src="https://raw.githubusercontent.com/QuentinFuxa/WhisperLiveKit/refs/heads/main/demo.png" alt="WhisperLiveKit Demo" width="730">

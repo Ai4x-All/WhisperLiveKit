@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WhisperLiveKit WebSocket 语音转写示例</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem; }
+    h1 { font-size: 1.25rem; }
+    .url-row { display: flex; gap: 0.5rem; margin-bottom: 1rem; align-items: center; }
+    .url-row input { flex: 1; padding: 0.5rem; }
+    .url-row label { min-width: 5rem; }
+    button { padding: 0.6rem 1.2rem; cursor: pointer; border-radius: 6px; border: 1px solid #333; background: #f5f5f5; }
+    button.recording { background: #e57373; color: #fff; border-color: #c62828; }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
+    #status { margin: 0.5rem 0; color: #666; font-size: 0.9rem; }
+    #transcript { white-space: pre-wrap; min-height: 120px; padding: 1rem; border: 1px solid #ddd; border-radius: 8px; background: #fafafa; margin-top: 1rem; }
+    .line { margin: 0.25rem 0; }
+    .speaker { font-weight: 600; color: #1976d2; }
+    .buffer { color: #888; }
+  </style>
+</head>
+<body>
+  <h1>WhisperLiveKit WebSocket 语音转写</h1>
+  <div class="url-row">
+    <label for="wsUrl">WebSocket URL</label>
+    <input id="wsUrl" type="text" value="ws://10.10.10.18:7100/asr" placeholder="ws://host:8000/asr" />
+  </div>
+  <button id="btnRecord" type="button">开始录音 / 转写</button>
+  <p id="status">填写 URL 后点击按钮开始。</p>
+  <div id="transcript"></div>
+
+  <script>
+    (function () {
+      const wsUrlInput = document.getElementById("wsUrl");
+      const btnRecord = document.getElementById("btnRecord");
+      const statusEl = document.getElementById("status");
+      const transcriptEl = document.getElementById("transcript");
+
+      let ws = null;
+      let isRecording = false;
+      let recorder = null;
+      let stream = null;
+      const CHUNK_MS = 250;
+
+      function setStatus(msg) {
+        statusEl.textContent = msg;
+      }
+
+      function appendToTranscript(lines, bufferTranscription, bufferDiarization) {
+        let html = "";
+        (lines || []).forEach(function (line) {
+          if (line.speaker !== undefined && line.speaker !== -2) {
+            html += '<div class="line"><span class="speaker">说话人 ' + line.speaker + '</span>: ' + escapeHtml(line.text || "") + "</div>";
+          }
+        });
+        if (bufferTranscription) html += '<div class="line buffer">' + escapeHtml(bufferTranscription) + "</div>";
+        if (bufferDiarization) html += '<div class="line buffer">' + escapeHtml(bufferDiarization) + "</div>";
+        transcriptEl.innerHTML = html;
+      }
+
+      function escapeHtml(s) {
+        const div = document.createElement("div");
+        div.textContent = s;
+        return div.innerHTML;
+      }
+
+      function connect() {
+        return new Promise(function (resolve, reject) {
+          const url = wsUrlInput.value.trim();
+          if (!url.startsWith("ws://") && !url.startsWith("wss://")) {
+            reject(new Error("URL 必须以 ws:// 或 wss:// 开头"));
+            return;
+          }
+          ws = new WebSocket(url);
+          ws.onopen = function () {
+            setStatus("已连接，等待服务端 config...");
+            resolve();
+          };
+          ws.onclose = function () {
+            setStatus("连接已关闭");
+            ws = null;
+          };
+          ws.onerror = function () {
+            reject(new Error("WebSocket 连接失败"));
+          };
+          ws.onmessage = function (event) {
+            if (typeof event.data !== "string") return;
+            try {
+              const msg = JSON.parse(event.data);
+              if (msg.type === "config") {
+                setStatus("已连接。请点击按钮开始录音。");
+                return;
+              }
+              if (msg.type === "ready_to_stop") {
+                setStatus("处理完成，可再次录音。");
+                if (isRecording) {
+                  stopRecording();
+                }
+                return;
+              }
+              // 转录更新：Legacy API 使用 lines + buffer_*
+              const lines = msg.lines || [];
+              const bufT = msg.buffer_transcription || "";
+              const bufD = msg.buffer_diarization || "";
+              appendToTranscript(lines, bufT, bufD);
+            } catch (e) {
+              console.warn("Parse message error", e);
+            }
+          };
+        });
+      }
+
+      async function startRecording() {
+        const url = wsUrlInput.value.trim();
+        if (!url) {
+          setStatus("请先填写 WebSocket URL");
+          return;
+        }
+        if (!ws || ws.readyState !== WebSocket.OPEN) {
+          try {
+            await connect();
+          } catch (err) {
+            setStatus("连接失败: " + err.message);
+            return;
+          }
+        }
+
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        } catch (err) {
+          setStatus("无法访问麦克风: " + err.message);
+          return;
+        }
+
+        try {
+          recorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
+        } catch (e) {
+          recorder = new MediaRecorder(stream);
+        }
+
+        recorder.ondataavailable = function (e) {
+          if (ws && ws.readyState === WebSocket.OPEN && e.data && e.data.size > 0) {
+            ws.send(e.data);
+          }
+        };
+        recorder.start(CHUNK_MS);
+        isRecording = true;
+        btnRecord.classList.add("recording");
+        btnRecord.textContent = "停止录音";
+        setStatus("正在录音并转写...");
+      }
+
+      function stopRecording() {
+        if (recorder) {
+          recorder.stop();
+          recorder = null;
+        }
+        if (stream) {
+          stream.getTracks().forEach(function (t) {
+            t.stop();
+          });
+          stream = null;
+        }
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(new Blob([], { type: "audio/webm" }));
+        }
+        isRecording = false;
+        btnRecord.classList.remove("recording");
+        btnRecord.textContent = "开始录音 / 转写";
+      }
+
+      btnRecord.addEventListener("click", function () {
+        if (isRecording) {
+          setStatus("正在结束并处理最后一段...");
+          stopRecording();
+        } else {
+          startRecording();
+        }
+      });
+    })();
+  </script>
+</body>
+</html>

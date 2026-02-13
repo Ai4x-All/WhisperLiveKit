@@ -168,6 +168,7 @@ class SimulStreamingASR:
 
         self.fast_encoder = False
         self._resolved_model_path = None
+        self._decoder_model_ref = None
         self.encoder_backend = "whisper"
         self.use_full_mlx = getattr(self, "use_full_mlx", False)
         preferred_backend = getattr(self, "backend", "auto")
@@ -182,11 +183,16 @@ class SimulStreamingASR:
             compatible_whisper_mlx = model_info.compatible_whisper_mlx
             compatible_faster_whisper = model_info.compatible_faster_whisper
             
-            if not self.use_full_mlx and not model_info.has_pytorch:
+            if not self.use_full_mlx and not model_info.has_pytorch and not compatible_faster_whisper:
                 raise FileNotFoundError(
                     f"No PyTorch checkpoint (.pt/.bin/.safetensors) found under {self.model_path}"
-                )            
+                )
             self.model_name = resolved_model_path.name if resolved_model_path.is_dir() else resolved_model_path.stem
+            # CTranslate2-only dir: decoder must be provided via --decoder-dir (offline) or will load by name (network)
+            if compatible_faster_whisper and not model_info.has_pytorch:
+                self._decoder_model_ref = self.model_name.replace("faster-whisper-", "", 1)
+            else:
+                self._decoder_model_ref = None
         elif self.model_size is not None:
             self.model_name = self.model_size
         else:
@@ -326,7 +332,17 @@ class SimulStreamingASR:
         return True
 
     def load_model(self):
-        model_ref = str(self._resolved_model_path) if self._resolved_model_path else self.model_name
+        decoder_dir = getattr(self, "decoder_dir", None)
+        if self._decoder_model_ref:
+            if decoder_dir:
+                model_ref = str(decoder_dir)
+            else:
+                raise RuntimeError(
+                    "Offline: when using --model-path to a CTranslate2-only dir, set --decoder-dir to a "
+                    "directory containing the PyTorch Whisper decoder .pt (e.g. pytorch-whisper-medium with medium.pt)."
+                )
+        else:
+            model_ref = str(self._resolved_model_path) if self._resolved_model_path else self.model_name
         lora_path = getattr(self, 'lora_path', None)
         whisper_model = load_model(
             name=model_ref,

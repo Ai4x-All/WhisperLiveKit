@@ -107,6 +107,13 @@ def parse_args():
         help="Dir where Whisper model.bin and other files are saved. This option overrides --model and --model_cache_dir parameter.",
     )
     parser.add_argument(
+        "--decoder-dir",
+        type=str,
+        default=None,
+        dest="decoder_dir",
+        help="Dir containing PyTorch Whisper decoder .pt (for offline when using --model-path to CTranslate2-only dir). No network used if set.",
+    )
+    parser.add_argument(
         "--lora-path",
         type=str,
         default=None,

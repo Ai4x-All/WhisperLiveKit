@@ -69,6 +69,7 @@ class TranscriptionEngine:
             "model_cache_dir": None,
             "model_dir": None,
             "model_path": None,
+            "decoder_dir": None,
             "lora_path": None,
             "lan": "auto",
             "direct_english_translation": False,
